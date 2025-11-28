@@ -1,4 +1,62 @@
-A FORRÁSKÓD ELÉRHETŐ, MIVEL ÚGY FELMÉRGELTEK, HOGY MUSZÁJ VAGYOK KITENNI
+A FORRÁSKÓD ELÉRHETŐ, MIVEL ÚGY FELMÉRGELTEK, HOGY MUSZÁJ VAGYOK KITENNI ÉS ROHADT RÉSZLETES INFÓT ADNI, HOGY MIT MIÉRT ÍGY ÍRTAM.
+PowerShell és ExecutionPolicy Bypass
+Mi történik
+A program PowerShellt indít a megadott .ps1 fájl futtatására, és a parancsban szerepel a -NoProfile -ExecutionPolicy Bypass opció.
+Miért tűnhet gyanúsnak
+A Bypass opció megkerüli a helyi végrehajtási korlátozásokat, és ez egy ismert mintázat, amit rosszindulatú scriptek is használnak.
+Miért csináltam így
+Szükségem volt arra, hogy a felhasználók által írt PowerShell scriptek megbízhatóan fussanak különböző környezetekben, ahol az ExecutionPolicy beállítások eltérhetnek. A -NoProfile biztosítja, hogy a felhasználó profilja ne módosítsa a futtatást, a Bypass pedig garantálja, hogy a script lefut anélkül, hogy a felhasználónak manuálisan kellene módosítania a rendszerszintű beállításokat.
+Mit dumálok?
+A PowerShell csak lokálisan fut a felhasználó gépén. Nincs hálózati letöltés, nincs távoli vezérlés, és a Bypass használata kizárólag a helyi futtatási megbízhatóság miatt van. Ha szükséges, alternatívát is kínálok RemoteSigned beállítással vagy dokumentált engedélyezési lépésekkel.
+
+Külső eszközök meghívása subprocess segítségével
+Mi történik
+A program meglévő eszközöket hív meg, például PyInstaller vagy ps2exe, a subprocess modulon keresztül.
+Miért tűnhet gyanúsnak
+A parancsok programból történő indítása lehetővé teszi tetszőleges parancsok futtatását, és az AV rendszerek ezt potenciálisan veszélyes viselkedésnek tekintik.
+Miért csináltam így
+Nem akartam újraimplementálni a csomagolólogikát. A legegyszerűbb és legstabilabb megoldás az, hogy a hivatalos, jól ismert parancssori eszközöket használom, és azok viselkedését reprodukálom.
+Mit dumálok?
+Mellékelem a pontos meghívott parancsokat és a bemeneti fájlok listáját. Egyértelműen leírom, hogy csak helyi, ismert eszközök futnak, és nincs semmilyen automatikus hálózati letöltés vagy távoli parancs végrehajtás.
+
+Ideiglenes wrapper fájlok létrehozása
+Mi történik
+Ha ps2exe nem elérhető, a program létrehoz egy kis Python wrapper fájlt, amely a PowerShell scriptet futtatja és opcionálisan splash képet jelenít meg.
+Miért tűnhet gyanúsnak
+Dinamikusan létrehozott és futtatott fájlok mintázata hasonlít a dropper viselkedésre, ezért az AV rendszerek erre külön figyelnek.
+Miért csináltam így
+A wrapper egyszerű, univerzális megoldás a kompatibilitás és a felhasználói élmény biztosítására. Így elkerülhető, hogy a felhasználónak külön modulokat kelljen telepítenie, és biztosítható a megbízható indítás minden környezetben.
+Mit dumálok?
+Közzéteszem a wrapper teljes forráskódját, hogy átlátható legyen. Egyértelműen kijelentem, hogy a wrapper nem tölt le semmit, csak lokálisan futtat egy meglévő .ps1 fájlt.
+
+PyInstaller --onefile és add-data használata
+Mi történik
+A build opciók egyetlen EXE fájlt hoznak létre és beágyazzák az erőforrásokat, például ikonokat és a scriptet.
+Miért tűnhet gyanúsnak
+Egyfájlú EXE-k futás közben kibontják magukat memóriába vagy ideiglenes mappába, ami dinamikus viselkedés és nehezebb statikusan elemezni.
+Miért csináltam így
+A cél a felhasználói egyszerűség volt. Egyetlen EXE könnyebben terjeszthető és futtatható kevésbé technikai felhasználóknál. A beágyazott erőforrások pedig megakadályozzák a hiányzó fájl hibákat.
+Mit dumálok?
+Megadom a pontos PyInstaller parancsot és a beágyazott fájlok listáját. Felajánlok alternatív buildet onedir formában és telepítővel azoknak, akik el akarják kerülni az egyfájlú csomagolást.
+
+Kódaláírás hiánya és további lépések
+Mi történik
+A fejlesztési fázisban a buildelt EXE nincs Authenticode aláírva.
+Miért tűnhet gyanúsnak
+Aláíratlan binárisoknál az AV rendszerek és az operációs rendszer is óvatosabb. Az aláírás hiánya növeli a hamis pozitív esélyét.
+Miért csináltam így
+Fejlesztés közben a tanúsítvány beszerzése és adminisztrációja késlelteti a gyors iterációt. A prioritás a működő, reprodukálható build volt.
+Mit dumálok ?
+Közlöm, hogy a kódaláírás tervezett lépés, és megadom a tervezett ütemtervet. Addig is részletes build lépéseket és forráskódot adok meg az AV szolgáltatóknak a gyors újraelemzéshez.
+
+Mit küldök az AV szolgáltatóknak és a felhasználóknak
+A csatolandó adatok
+- SHA256 hash a gyanús EXE fájlról.
+- Pontos build parancs ahogy lefutott.
+- Rövid, világos leírás arról, mit csinál az eszköz.
+- A releváns forráskódrészletek PowerShell indítás, wrapper teljes forrása, subprocess hívások.
+- Környezeti információk Python verzió, PyInstaller verzió, operációs rendszer verzió, build időpont.
+
 import os
 import sys
 import threading
@@ -340,3 +398,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
