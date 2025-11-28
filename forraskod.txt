@@ -1,3 +1,342 @@
-Eddig volt elérhető ingyenes a forrás kód, inenstől a totval virus visszajelzésére várunk, hogy le szedjék a false infót. 
-Kérésre lett a forráskód ki téve.
+A FORRÁSKÓD ELÉRHETŐ, MIVEL ÚGY FELMÉRGELTEK, HOGY MUSZÁJ VAGYOK KITENNI
+import os
+import sys
+import threading
+import subprocess
+import shlex
+import tempfile
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 
+# Prevent self-restart when running as frozen EXE
+IS_FROZEN = getattr(sys, "frozen", False)
+PYLAUNCHER = "py" if IS_FROZEN else sys.executable
+
+# -------------------------
+# App config
+# -------------------------
+APP_NAME = "Script ⇄ EXE Builder (Python & PowerShell)"
+DEFAULT_OUT_DIR = os.path.join(os.getcwd(), "build_out")
+os.makedirs(DEFAULT_OUT_DIR, exist_ok=True)
+
+# -------------------------
+# Helpers
+# -------------------------
+def quote_path(p: str) -> str:
+    return f'"{p}"' if " " in p else p
+
+def is_python_file(path: str) -> bool:
+    return path.lower().endswith(".py")
+
+def is_powershell_file(path: str) -> bool:
+    return path.lower().endswith(".ps1")
+
+def pyinstaller_available() -> bool:
+    try:
+        subprocess.run([PYLAUNCHER, "-m", "PyInstaller", "--version"],
+                       capture_output=True, text=True, check=True)
+        return True
+    except Exception:
+        return False
+
+def ps2exe_available() -> bool:
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-Command", "Get-Module -ListAvailable ps2exe | Select-Object -First 1"
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return "ps2exe" in (r.stdout or "").lower()
+    except Exception:
+        return False
+
+def make_python_wrapper_for_ps1(ps1_path: str, index_image: str | None) -> str:
+    """
+    Creates a temporary Python wrapper that runs the PowerShell script,
+    optionally showing an index image splash via Tkinter.
+    """
+    wrapper_code = f'''import os, sys, subprocess, tkinter as tk
+from tkinter import ttk
+INDEX_IMAGE = r"{index_image or ''}"
+PS1_PATH = r"{ps1_path}"
+
+def show_splash():
+    if not INDEX_IMAGE or not os.path.isfile(INDEX_IMAGE):
+        return
+    root = tk.Tk()
+    root.title("Starting...")
+    root.geometry("500x300")
+    try:
+        from PIL import Image, ImageTk
+        img = Image.open(INDEX_IMAGE)
+        img = img.resize((480, 260))
+        photo = ImageTk.PhotoImage(img)
+        lbl = tk.Label(root, image=photo)
+        lbl.image = photo
+        lbl.pack(padx=10, pady=10)
+    except Exception:
+        lbl = tk.Label(root, text="Launching...", font=("Segoe UI", 12))
+        lbl.pack(expand=True)
+    ttk.Label(root, text="Running PowerShell…").pack(pady=10)
+    root.after(1200, root.destroy)
+    root.mainloop()
+
+def main():
+    show_splash()
+    cmd = ["powershell","-NoProfile","-ExecutionPolicy","Bypass","-File", PS1_PATH]
+    p = subprocess.Popen(cmd)
+    p.wait()
+
+if __name__ == "__main__":
+    main()
+'''
+    tmp_dir = tempfile.mkdtemp(prefix="ps_wrapper_")
+    wrapper_path = os.path.join(tmp_dir, "ps_wrapper.py")
+    with open(wrapper_path, "w", encoding="utf-8") as f:
+        f.write(wrapper_code)
+    return wrapper_path
+
+# -------------------------
+# Builder core
+# -------------------------
+class Builder:
+    def __init__(self, logger):
+        # logger is a callable that accepts a string (e.g., App.log_msg)
+        self.log = logger
+
+    def build_python(self, script_path: str, out_dir: str, onefile: bool, windowed: bool,
+                     icon_path: str | None, index_image: str | None, extra_data: list[str]):
+        if not pyinstaller_available():
+            raise RuntimeError("PyInstaller nem elérhető. Telepítsd: py -m pip install pyinstaller")
+
+        cmd = [PYLAUNCHER, "-m", "PyInstaller", script_path]
+        if onefile:
+            cmd.append("--onefile")
+        if windowed:
+            cmd.append("--windowed")
+        else:
+            cmd.append("--console")
+
+        if icon_path and os.path.isfile(icon_path):
+            cmd.append(f"--icon={icon_path}")
+
+        add_data_items = []
+        if index_image and os.path.isfile(index_image):
+            add_data_items.append(index_image)
+        for d in extra_data:
+            if os.path.exists(d):
+                add_data_items.append(d)
+
+        for item in add_data_items:
+            target_name = os.path.basename(item)
+            cmd.append(f"--add-data={item}{os.pathsep}{target_name}")
+
+        cmd.append(f"--distpath={out_dir}")
+        cmd.append("--noconfirm")
+
+        self.log("PyInstaller parancs:")
+        self.log(" ".join(shlex.quote(c) for c in cmd))
+
+        r = subprocess.run(cmd, text=True, capture_output=True)
+        self.log(r.stdout)
+        if r.returncode != 0:
+            self.log(r.stderr)
+            raise RuntimeError("Build hiba történt (PyInstaller).")
+
+        self.log("Python EXE build kész.")
+
+    def build_powershell(self, script_path: str, out_dir: str, icon_path: str | None):
+        if ps2exe_available():
+            exe_name = os.path.splitext(os.path.basename(script_path))[0] + ".exe"
+            out_path = os.path.join(out_dir, exe_name)
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                f"Invoke-ps2exe -inputFile {quote_path(script_path)} -outputFile {quote_path(out_path)}"
+            ]
+            if icon_path and os.path.isfile(icon_path):
+                cmd[-1] += f" -iconFile {quote_path(icon_path)}"
+
+            self.log("ps2exe parancs:")
+            self.log(" ".join(cmd))
+            r = subprocess.run(cmd, text=True, capture_output=True)
+            self.log(r.stdout)
+            if r.returncode != 0:
+                self.log(r.stderr)
+                raise RuntimeError("Build hiba történt (ps2exe).")
+            self.log("PowerShell EXE build kész (ps2exe).")
+        else:
+            # Fallback: Python wrapper + PyInstaller
+            self.log("ps2exe nem elérhető. Python wrapper + PyInstaller fallback indul.")
+            wrapper = make_python_wrapper_for_ps1(script_path, None)
+            self.build_python(
+                wrapper,
+                out_dir=out_dir,
+                onefile=True,
+                windowed=True,
+                icon_path=icon_path,
+                index_image=None,
+                extra_data=[script_path]
+            )
+            self.log("PowerShell EXE build kész (wrapper + PyInstaller).")
+
+# -------------------------
+# GUI
+# -------------------------
+class App:
+    def __init__(self, root):
+        self.root = root
+        root.title(APP_NAME)
+        root.geometry("900x600")
+
+        self.script_path = tk.StringVar()
+        self.script_type = tk.StringVar(value="Python")
+        self.out_dir = tk.StringVar(value=DEFAULT_OUT_DIR)
+        self.onefile = tk.BooleanVar(value=True)
+        self.windowed = tk.BooleanVar(value=True)
+        self.icon_path = tk.StringVar()
+        self.index_image = tk.StringVar()
+        self.extra_files = []
+
+        top = tk.Frame(root)
+        top.pack(fill=tk.X, padx=10, pady=10)
+
+        # Script select
+        ttk.Label(top, text="Script típusa:").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(top, textvariable=self.script_type, values=["Python", "PowerShell"], width=20).grid(row=0, column=1, sticky="w", padx=8)
+
+        ttk.Label(top, text="Script fájl:").grid(row=1, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.script_path, width=60).grid(row=1, column=1, sticky="we", padx=8)
+        ttk.Button(top, text="Választ", command=self.choose_script).grid(row=1, column=2, padx=4)
+
+        # Options
+        ttk.Checkbutton(top, text="Onefile EXE", variable=self.onefile).grid(row=2, column=0, sticky="w")
+        ttk.Checkbutton(top, text="GUI mód (windowed)", variable=self.windowed).grid(row=2, column=1, sticky="w")
+
+        ttk.Label(top, text="Ikon (.ico):").grid(row=3, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.icon_path, width=40).grid(row=3, column=1, sticky="we", padx=8)
+        ttk.Button(top, text="Választ", command=self.choose_icon).grid(row=3, column=2, padx=4)
+
+        ttk.Label(top, text="Index kép (splash/add-data):").grid(row=4, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.index_image, width=40).grid(row=4, column=1, sticky="we", padx=8)
+        ttk.Button(top, text="Választ", command=self.choose_index_image).grid(row=4, column=2, padx=4)
+
+        ttk.Label(top, text="Kimeneti könyvtár:").grid(row=5, column=0, sticky="w")
+        ttk.Entry(top, textvariable=self.out_dir, width=40).grid(row=5, column=1, sticky="we", padx=8)
+        ttk.Button(top, text="Választ", command=self.choose_out_dir).grid(row=5, column=2, padx=4)
+
+        ttk.Button(top, text="Extra fájl hozzáadása (add-data)", command=self.add_extra_file).grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Button(top, text="Build indítása", command=self.start_build).grid(row=6, column=1, sticky="w", pady=4)
+        ttk.Button(top, text="Extra lista törlése", command=self.clear_extra_files).grid(row=6, column=2, sticky="w", pady=4)
+
+        # Progress + log
+        self.progress = ttk.Progressbar(root, orient=tk.HORIZONTAL, mode="determinate", maximum=100)
+        self.progress.pack(fill=tk.X, padx=10, pady=4)
+        self.log = tk.Text(root, height=20, wrap="word")
+        self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+
+        self.builder = Builder(self.log_msg)
+
+    def log_msg(self, msg: str):
+        # UI updates must run on main thread
+        def _append():
+            self.log.insert(tk.END, msg + "\n")
+            self.log.see(tk.END)
+        self.root.after(0, _append)
+
+    def choose_script(self):
+        filetypes = [("Python script", "*.py"), ("PowerShell script", "*.ps1"), ("All files", "*.*")]
+        path = filedialog.askopenfilename(title="Válassz scriptet", filetypes=filetypes)
+        if path:
+            self.script_path.set(path)
+            if is_python_file(path):
+                self.script_type.set("Python")
+            elif is_powershell_file(path):
+                self.script_type.set("PowerShell")
+
+    def choose_icon(self):
+        path = filedialog.askopenfilename(title="Ikon választása", filetypes=[("Icon", "*.ico")])
+        if path:
+            self.icon_path.set(path)
+
+    def choose_index_image(self):
+        path = filedialog.askopenfilename(title="Indexkép választása", filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.bmp"), ("All files","*.*")])
+        if path:
+            self.index_image.set(path)
+
+    def choose_out_dir(self):
+        d = filedialog.askdirectory(title="Kimeneti könyvtár")
+        if d:
+            self.out_dir.set(d)
+
+    def add_extra_file(self):
+        path = filedialog.askopenfilename(title="Extra fájl hozzáadása")
+        if path:
+            self.extra_files.append(path)
+            self.log_msg(f"Extra hozzáadva: {path}")
+
+    def clear_extra_files(self):
+        self.extra_files = []
+        self.log_msg("Extra fájl lista törölve.")
+
+    def start_build(self):
+        script = self.script_path.get().strip()
+        if not script or not os.path.isfile(script):
+            messagebox.showerror("Hiba", "Adj meg érvényes script fájlt.")
+            return
+
+        # Prevent converting the running application itself
+        running_target = os.path.abspath(sys.argv[0])
+        if os.path.abspath(script) == running_target:
+            messagebox.showerror("Hiba", "Az alkalmazás nem tudja saját magát konvertálni.")
+            return
+
+        out_dir = self.out_dir.get().strip()
+        os.makedirs(out_dir, exist_ok=True)
+
+        # Reset progress on main thread
+        self.root.after(0, lambda: self.progress.configure(value=0))
+
+        def worker():
+            try:
+                self.root.after(0, lambda: self.progress.configure(value=5))
+                if self.script_type.get() == "Python":
+                    self.builder.build_python(
+                        script_path=script,
+                        out_dir=out_dir,
+                        onefile=self.onefile.get(),
+                        windowed=self.windowed.get(),
+                        icon_path=self.icon_path.get().strip() or None,
+                        index_image=self.index_image.get().strip() or None,
+                        extra_data=self.extra_files
+                    )
+                else:
+                    self.builder.build_powershell(
+                        script_path=script,
+                        out_dir=out_dir,
+                        icon_path=self.icon_path.get().strip() or None
+                    )
+
+                self.root.after(0, lambda: self.progress.configure(value=100))
+                self.log_msg(f"Kész. EXE a(z) {out_dir} mappában.")
+                self.root.after(0, lambda: messagebox.showinfo("Kész", f"Sikeres build.\nKimenet: {out_dir}"))
+            except Exception as e:
+                self.root.after(0, lambda: self.progress.configure(value=0))
+                self.log_msg(f"Hiba: {e}")
+                self.root.after(0, lambda: messagebox.showerror("Build hiba", str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+# -------------------------
+# Entry point
+# -------------------------
+def main():
+    root = tk.Tk()
+    app = App(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
